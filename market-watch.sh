@@ -2,7 +2,7 @@
 
 #==============Variables==================
 #==============IEXCloud===================
-SECRET="$IEX_SECRET"
+SECRET=$IEX_SECRET
 IEX_VERSION=stable
 case "$SECRET" in
 	Tsk_*)	BASE_URL="https://sandbox.iexapis.com/${IEX_VERSION}";;
@@ -25,18 +25,32 @@ case "$(uname -s)" in
 	MINGW*)  system=MinGw;;
 	*)       system="Other"
 esac
-LOG_PATH=~/.config/stocks
-LOG_FILE="${LOG_PATH}/stocks.log"
-CONFIG_PATH="~/.config/stocks"
-CONFIG_FILE="${CONFIG_PATH}/config"
+LOG_PATH=~/.config/market-watch
+LOG_FILE="${LOG_PATH}/market-watch.log"
 DELAY=60; #dealy in seconds
 #==============End Variables==============
 
-#INFO: Prints timestamp and log message to log file
-#INPUT: Log Message
-#RETURN: null
+#INFO: 		Deletes an element from both symbol arrays
+#INPUT:		The index number
+#RESTURN: 	NULL
+function delete_symbol_element(){
+	local temp_symbol_data=();
+	local temp_symbol=();
+	for (( i=0; i<"${#symbols[@]}"; i++ )); do
+		if [ "$i" -ne "$1" ]; then
+			temp_symbol_data+=( "${symbols_data[$i]}" )
+			temp_symbol+=( "${symbols[$i]}" )
+		fi
+	done;
+	symbols=( "${temp_symbol[@]}" )
+	symbols_data=( "${temp_symbol_data[@]}" )
+}
+
+#INFO: 		Prints timestamp and log message to log file
+#INPUT: 	Log Message
+#RETURN: 	NULL
 function write_log(){
-	#CReate folder if it does not exist
+	#Create folder if it does not exist
 	mkdir -p "${LOG_PATH}"
 
 	local timestamp=$(date +'%D %T')
@@ -46,23 +60,12 @@ function write_log(){
 		$(printf "[${timestamp}] ${1}\n" >> "${LOG_FILE}")
 	fi
 }
-#INFO: TODO
-#INPUT: null
-#RETURN: null
-function load_config(){
-	echo "TODO"
-}
 
-#INFO: TODO
-#INPUT: null
-#RETURN: null
-function write_config(){
-	echo "TODO"
-}
-#INFO: Initializes the bash script with settings and validations
-#INPUT: null
-#RETURN: null
+#INFO: 		Initializes the bash script with settings and validations
+#INPUT: 	NULL
+#RETURN: 	NULL
 function init(){
+
 	rm "${LOG_FILE}"
 	#Validate curl is installed
 	if command -v curl >/dev/null 2>&1; then 
@@ -73,6 +76,7 @@ function init(){
 		printf "       Stopping...\n"
 		exit 1
 	fi
+
 	#Validate jq is installed
 	if command -v jq >/dev/null 2>&1; then 
 		jqed=1; 
@@ -83,22 +87,27 @@ function init(){
 		exit 1
 	fi
 
+	#Setup global variables
 	symbols=();
 	symbols_data=();
 	screen="";
 	last_update=0;
+	current_idx=$((0))
 
-	load_config;
 	read w_height w_width < <(stty size)
 
 	trap quit EXIT
 
+	printf "\033[?25l"
+
 	write_log "${COLOR_GREEN}OK:${COLOR_DEFAULT} Initiated successfully..."
 }
 
-#INFO: Generates the url for curl call
-#INPUT: API path
-#RETURN: full URL to curl against
+
+
+#INFO: 		Generates the url for curl call
+#INPUT: 	API path
+#RETURN: 	Full URL to curl against
 function generate_call(){
 
 	local path="$1"
@@ -112,9 +121,9 @@ function generate_call(){
 	fi
 }
 
-#INFO: Adds symbol to the array list
-#INPUT: Symbol
-#RETURN: null
+#INFO: 		Adds symbol to the array list
+#INPUT: 	Symbol
+#RETURN: 	NULL
 function add_symbol(){
 	#Check that a symbol was provided to function call
 	if [[ ! -z "$1" ]]; then
@@ -130,18 +139,18 @@ function add_symbol(){
 	fi
 }
 
-#INFO: Used for centering a string in the tab
-#INPUT: Max Length, String
-#RETURN: String
+#INFO: 		Used for centering a string in the tab
+#INPUT: 	Max Length, String
+#RETURN: 	String
 function centering(){
 	local str="$2"
 	local diff=$((($1 - ${#str}) / 2))
 	printf "%${diff}s%s%${diff}s" "" "$str" "" 
 }
 
-#INFO: Prints the header lines and values
-#INPUT: null
-#RETURN: null
+#INFO: 		Prints the header lines and values
+#INPUT: 	NULL
+#RETURN: 	NULL
 function print_header(){
 	headers=( "Tag" "Price" 'Change' "Change" "Open")
 	size=$((("$w_width" - 2) / ("${#headers[@]}" )))
@@ -175,52 +184,69 @@ function print_header(){
 	#End end line
 }
 
-#INFO: Prints each symbol line and additional lines to fill screen
-#INPUT: null
-#RETURN: null
+#INFO: 		Prints Only the specified symbol
+#INPUT: 	Symbol, Selection escape code
+#RETURN: 	String line
+function print_symbol(){
+
+	local value="";
+	local total_spacing=1
+	local line=""
+	local response=$1
+
+	local curr_price="$(echo $response | jq .latestPrice )"
+	local open="$(echo $response | jq .open )"
+	local curr_symbol="$(echo "$response" | jq .symbol | grep -oP '"\K.*[^"]')"
+	local change_percent="$(echo $response | jq .changePercent )"
+	local change_val="\$$(echo $response | jq .change )"
+
+	local symbol_values=( "$curr_symbol" "$curr_price" "$change_percent" "$change_val" "$open" )
+
+	local color=""
+	if [[ "$open" > "$curr_price" ]]; then
+		color="$COLOR_RED"
+	else
+		color="$COLOR_GREEN"
+	fi
+
+	line+="${box[3]}"
+	line+="${2}"
+
+	for item in "${symbol_values[@]}"; do
+		value=$(centering $size $item)
+		total_spacing=$(($total_spacing + ${#value}))
+		line+="${value}"
+	done
+
+	#Print closing line
+	line+=$(printf "%$(($w_width - ($total_spacing + 1)))s" "");
+	line+=$(printf "${COLOR_DEFAULT}${box[3]}")
+	line+="\n"
+
+	printf "${line}"
+
+}
+
+#INFO: 		Prints each symbol line and additional lines to fill screen
+#INPUT: 	NULL
+#RETURN: 	NULL
 function print_body(){
 	#Get the number of rows after Symbols
 	local additional=$(expr $w_height - 4 - ${#symbols[@]})
 	#Loop through every Symbol
+	local idx=1;
 	for response in "${symbols_data[@]}"; do
-		screen+="${box[3]}"
+
 		#Determine if the print color should be green or red
-		local curr_price="$(echo $response | jq .latestPrice )"
-		local open="$(echo $response | jq .open )"
-		local color=""
-		if [[ "$open" > "$curr_price" ]]; then
-			local color="$COLOR_RED"
-		else
-			local color="$COLOR_GREEN"
-		fi
+		local selection=""
+		if [ $current_idx -eq $idx ]; then
+			selection="\033[7m"
+		fi;
 
 		#Print each symbol tab data
-		local value="";
-		local total_spacing=1
+		screen+="$(print_symbol "$response" "$selection")\n"
 
-		value=$(centering $size "$(echo "$response" | jq .symbol | grep -oP '"\K.*[^"]')")
-		total_spacing=$(($total_spacing + ${#value}))
-		screen+="${color}${value}${COLOR_DEFAULT}"
-
-		value=$(centering $size "\$$(echo $response | jq .latestPrice )")
-		total_spacing=$(($total_spacing + ${#value}))
-		screen+="${color}${value}${COLOR_DEFAULT}"
-
-		value=$(centering $size "$(echo $response | jq .changePercent )")
-		total_spacing=$(($total_spacing + ${#value}))
-		screen+="${color}${value}${COLOR_DEFAULT}"
-
-		value=$(centering $size "\$$(echo $response | jq .change )")
-		total_spacing=$(($total_spacing + ${#value}))
-		screen+="${color}${value}${COLOR_DEFAULT}"
-
-		value=$(centering $size "\$$(echo $response | jq .open )")
-		total_spacing=$(($total_spacing + ${#value}))
-		screen+="${color}${value}${COLOR_DEFAULT}"
-
-		#Print closing line
-		screen+=$(printf "%$(($w_width - ($total_spacing - 2)))s" "${box[3]}");
-		screen+="\n"
+		idx=$(($idx + 1))
 	done
 
 	#Print all additional lines
@@ -230,15 +256,17 @@ function print_body(){
 	done
 }
 
-#INFO: Prints the final line and control information
-#INPUT: null
-#RETURN: null
+#INFO: 		Prints the final line and control information
+#INPUT: 	NULL
+#RETURN: 	NULL
 function print_footer(){
 	screen+="${box[5]}"
-	local temp=$(echo  "$((("$w_width" - 29 ) / 4))")
-	for (( i=0; i<"$w_width"-29; i++)); do
+	local timestamp=$(date +'%T')
+	local temp=$(echo  "$((("$w_width" - 40 ) / 4))")
+	for (( i=0; i<"$w_width"-40; i++)); do
 		case "$i" in
-			"$(("$temp" ))")  			screen+=" ${COLOR_DIM}↑${COLOR_DEFAULT} SELECT ${COLOR_DIM}↓${COLOR_DEFAULT}  ";;
+			2)							screen+=" [$timestamp] ";; #12
+			"$((("$temp" )))")  		screen+=" ${COLOR_DIM}↑${COLOR_DEFAULT} SELECT ${COLOR_DIM}↓${COLOR_DEFAULT}  ";;
 			"$((("$temp" * 2)))")		screen+=" ${COLOR_DIM}+${COLOR_DEFAULT} ADD ";;
 			"$((("$temp" * 3)))")  		screen+=" ${COLOR_DIM}←${COLOR_DEFAULT} DELETE ";;
 			*)       					screen+="${box[1]}"
@@ -247,9 +275,9 @@ function print_footer(){
 	screen+="${box[4]}"
 }
 
-#INFO: Print functions wrapper
-#INPUT: null
-#RETURN: null
+#INFO: 		Print functions wrapper
+#INPUT: 	NULL
+#RETURN: 	NULL
 function print(){
 	screen="";
 	print_header;
@@ -257,12 +285,11 @@ function print(){
 	print_footer;
 	clear;
 	printf "$screen"
-	printf "\033[?25l"
 }
 
-#INFO: Curls the url and pulls symbol data, only runs curl every $DELAY
-#INPUT: null
-#RETURN: null
+#INFO: 		Curls the url and pulls symbol data, only runs curl every $DELAY
+#INPUT: 	NULL
+#RETURN: 	NULL
 function get_symbols_data(){
 	if [[ $(($(date +'%s') - $last_update)) -gt "$DELAY" ]]; then
 		symbols_data=();
@@ -277,9 +304,9 @@ function get_symbols_data(){
 	fi
 }
 
-#INFO: Checks and reprints the screen on a resize
-#INPUT: null
-#RETURN: null
+#INFO: 		Checks and reprints the screen on a resize
+#INPUT: 	NULL
+#RETURN: 	NULL
 function resize(){
 	if [[ $(stty size) != "$w_height $w_width" ]]; then 
 		read w_height w_width < <(stty size); 
@@ -287,9 +314,63 @@ function resize(){
 	fi
 }
 
-function quit(){
-	printf "\033[?25h"
-	write_config
+#INFO: 		Runs final commands to cleanup on exit
+#INPUT: 	NULL
+#RETURN: 	NULL
+function quit()	{ printf "\033[?25h"; clear; }
+
+#INFO: 		Moves the cursor to the specified row, rows start at 1
+#INPUT: 	row number
+#RETURN: 	NULL
+function cursor_to() { printf "\033[${1};0H"; }
+
+#INFO: 		Handles the selection highlight logic and the key presses
+#INPUT: 	NULL
+#RETURN: 	NULL
+function get_selection() {
+
+	key_input(){
+	    read -sn1 -t0.5 t;
+	    case $t in
+	        'A') echo up ;;
+	        'B') echo down ;;
+			'+') echo add ;;
+			'3') echo delete;;
+	    esac;
+	}
+
+	case `key_input` in
+		up)		if [ $current_idx -ne 0 ]; then
+					cursor_to $(($current_idx + 3))
+					print_symbol "${symbols_data[$(($current_idx - 1))]}" "${COLOR_DEFAULT}"
+				fi;
+				if [ "$current_idx" -le 0 ]; then 
+					current_idx=$((0))
+				else
+					current_idx=$((current_idx - 1))
+					cursor_to $(($current_idx + 3))
+					print_symbol "${symbols_data[$(($current_idx - 1))]}" "\033[7m"
+				fi
+				print;;
+		down)	if [ $current_idx -ne 0 ]; then
+					cursor_to $(($current_idx + 3))
+					print_symbol "${symbols_data[$(($current_idx - 1))]}" "${COLOR_DEFAULT}"
+				fi;
+				if [ $current_idx -eq "${#symbols[@]}" ]; then
+					current_idx=$((0))
+				else
+					current_idx=$((current_idx + 1))
+					cursor_to $(($current_idx + 3))
+					print_symbol "${symbols_data[$(($current_idx - 1))]}" "\033[7m"
+				fi;;
+		delete)	if [ $current_idx -ge 1 ]; then
+					write_log "${COLOR_GREEN}OK:{COLOR_DEFAULT} Deleting element at index $(($current_idx - 1))"
+					delete_symbol_element "$(($current_idx - 1))"
+					current_idx=$((0));
+					print;
+				fi;;
+		add) write_log "${COLOR_YELLOW}WARNING:{COLOR_DEFAULT} '+' button pressed but not coded.";;
+	esac
 }
 
 function main(){
@@ -305,9 +386,9 @@ function main(){
 	while true; do
 		get_symbols_data;
 		resize;
-		sleep 1s;
+		get_selection;
+		#sleep 1s;
 	done;
 	#End loop
 }
-
 main "$@";
